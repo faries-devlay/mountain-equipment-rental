@@ -79,12 +79,12 @@ type Repository interface {
 
 	// InsertAll records.
 	// Does not supports application cascade insert.
-	InsertAll(ctx context.Context, records interface{}) error
+	InsertAll(ctx context.Context, records interface{}, mutators ...Mutator) error
 
 	// MustInsertAll records.
 	// It'll panic if any error occurred.
 	// Does not supports application cascade insert.
-	MustInsertAll(ctx context.Context, records interface{})
+	MustInsertAll(ctx context.Context, records interface{}, mutators ...Mutator)
 
 	// Update a record in database.
 	// It'll panic if any error occurred.
@@ -319,7 +319,7 @@ func (r repository) FindAndCountAll(ctx context.Context, records interface{}, qu
 		return 0, err
 	}
 
-	return r.aggregate(cw, query, "count", "*")
+	return r.aggregate(cw, r.withDefaultScope(col.data, query, false), "count", "*")
 }
 
 func (r repository) MustFindAndCountAll(ctx context.Context, records interface{}, queriers ...Querier) int {
@@ -369,7 +369,7 @@ func (r repository) insert(cw contextWrapper, doc *Document, mutation Mutation) 
 		pField = pFields[0]
 	}
 
-	pValue, err := cw.adapter.Insert(cw.ctx, queriers, pField, mutation.Mutates)
+	pValue, err := cw.adapter.Insert(cw.ctx, queriers, pField, mutation.Mutates, mutation.OnConflict)
 	if err != nil {
 		return mutation.ErrorFunc.transform(err)
 	}
@@ -396,7 +396,7 @@ func (r repository) MustInsert(ctx context.Context, record interface{}, mutators
 	must(r.Insert(ctx, record, mutators...))
 }
 
-func (r repository) InsertAll(ctx context.Context, records interface{}) error {
+func (r repository) InsertAll(ctx context.Context, records interface{}, mutators ...Mutator) error {
 	finish := r.instrumenter.Observe(ctx, "rel-insert-all", "inserting multiple records")
 	defer finish(nil)
 
@@ -412,14 +412,19 @@ func (r repository) InsertAll(ctx context.Context, records interface{}) error {
 
 	for i := range muts {
 		doc := col.Get(i)
-		muts[i] = Apply(doc, newStructset(doc, false))
+		if i == 0 {
+			// only need to apply options from first one
+			muts[i] = Apply(doc, mutators...)
+		} else {
+			muts[i] = Apply(doc)
+		}
 	}
 
 	return r.insertAll(cw, col, muts)
 }
 
-func (r repository) MustInsertAll(ctx context.Context, records interface{}) {
-	must(r.InsertAll(ctx, records))
+func (r repository) MustInsertAll(ctx context.Context, records interface{}, mutators ...Mutator) {
+	must(r.InsertAll(ctx, records, mutators...))
 }
 
 // TODO: support assocs
@@ -432,6 +437,7 @@ func (r repository) insertAll(cw contextWrapper, col *Collection, mutation []Mut
 		pField      string
 		pFields     = col.PrimaryFields()
 		queriers    = Build(col.Table())
+		onConflict  = mutation[0].OnConflict
 		fields      = make([]string, 0, len(mutation[0].Mutates))
 		fieldMap    = make(map[string]struct{}, len(mutation[0].Mutates))
 		bulkMutates = make([]map[string]Mutate, len(mutation))
@@ -452,7 +458,7 @@ func (r repository) insertAll(cw contextWrapper, col *Collection, mutation []Mut
 		pField = pFields[0]
 	}
 
-	ids, err := cw.adapter.InsertAll(cw.ctx, queriers, pField, fields, bulkMutates)
+	ids, err := cw.adapter.InsertAll(cw.ctx, queriers, pField, fields, bulkMutates, onConflict)
 	if err != nil {
 		return mutation[0].ErrorFunc.transform(err)
 	}
@@ -515,7 +521,7 @@ func (r repository) update(cw contextWrapper, doc *Document, mutation Mutation, 
 		}
 
 		if mutation.Reload {
-			if err := r.find(cw, doc, query); err != nil {
+			if err := r.find(cw, doc, query.UsePrimary()); err != nil {
 				return err
 			}
 		}
@@ -935,8 +941,19 @@ func (r repository) MustDeleteAny(ctx context.Context, query Query) int {
 }
 
 func (r repository) deleteAny(cw contextWrapper, flag DocumentFlag, query Query) (int, error) {
-	if flag.Is(HasDeletedAt) {
-		mutates := map[string]Mutate{"deleted_at": Set("deleted_at", Now())}
+	hasDeletedAt := flag.Is(HasDeletedAt)
+	hasDeleted := flag.Is(HasDeleted)
+	mutates := make(map[string]Mutate, 1)
+	if hasDeletedAt {
+		mutates["deleted_at"] = Set("deleted_at", Now())
+	}
+	if hasDeleted {
+		mutates["deleted"] = Set("deleted", true)
+		if flag.Is(HasUpdatedAt) && !hasDeletedAt {
+			mutates["updated_at"] = Set("updated_at", Now())
+		}
+	}
+	if hasDeletedAt || hasDeleted {
 		return cw.adapter.Update(cw.ctx, query, "", mutates)
 	}
 
@@ -1112,7 +1129,9 @@ func (r repository) withDefaultScope(ddata documentData, query Query, preload bo
 		return query
 	}
 
-	if ddata.flag.Is(HasDeletedAt) {
+	if ddata.flag.Is(HasDeleted) {
+		query = query.Where(Eq("deleted", false))
+	} else if ddata.flag.Is(HasDeletedAt) {
 		query = query.Where(Nil("deleted_at"))
 	}
 
