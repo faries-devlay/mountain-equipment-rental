@@ -11,7 +11,7 @@ type find []*MockFind
 
 func (f *find) register(ctxData ctxData, queriers ...rel.Querier) *MockFind {
 	mf := &MockFind{
-		assert:   &Assert{ctxData: ctxData},
+		assert:   &Assert{ctxData: ctxData, repeatability: 1},
 		argQuery: rel.Build("", queriers...),
 	}
 	*f = append(*f, mf)
@@ -61,7 +61,9 @@ type MockFind struct {
 
 // Result sets the result of this query.
 func (mf *MockFind) Result(result interface{}) *Assert {
-	mf.argQuery.Table = rel.NewDocument(result, true).Table()
+	if mf.argQuery.Table == "" {
+		mf.argQuery.Table = rel.NewDocument(result, true).Table()
+	}
 	mf.argRecord = result
 	return mf.assert
 }

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
-func indirect(rv reflect.Value) interface{} {
+func indirectInterface(rv reflect.Value) interface{} {
 	if rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
 			return nil
@@ -17,6 +18,14 @@ func indirect(rv reflect.Value) interface{} {
 	}
 
 	return rv.Interface()
+}
+
+func indirectReflectType(rt reflect.Type) reflect.Type {
+	if rt.Kind() == reflect.Ptr {
+		return rt.Elem()
+	}
+
+	return rt
 }
 
 func must(err error) {
@@ -96,6 +105,11 @@ func isDeepZero(rv reflect.Value, depth int) bool {
 		c := rv.Complex()
 		return math.Float64bits(real(c)) == 0 && math.Float64bits(imag(c)) == 0
 	case reflect.Array:
+		// check one level deeper if it's an uuid ([16]byte)
+		if rv.Type().Elem().Kind() == reflect.Uint8 && rv.Len() == 16 {
+			depth += 1
+		}
+
 		for i := 0; i < rv.Len(); i++ {
 			if !isDeepZero(rv.Index(i), depth-1) {
 				return false
@@ -120,6 +134,34 @@ func isDeepZero(rv reflect.Value, depth int) bool {
 	}
 }
 
+func setPointerValue(ft reflect.Type, fv reflect.Value, rt reflect.Type, rv reflect.Value) bool {
+	if ft.Elem() != rt && !rt.AssignableTo(ft.Elem()) {
+		return false
+	}
+
+	if fv.IsNil() {
+		fv.Set(reflect.New(ft.Elem()))
+	}
+	fv.Elem().Set(rv)
+
+	return true
+}
+
+func setConvertValue(ft reflect.Type, fv reflect.Value, rt reflect.Type, rv reflect.Value) bool {
+	var (
+		rk = rt.Kind()
+		fk = ft.Kind()
+	)
+
+	// prevents unintentional conversion
+	if (rk >= reflect.Int || rk <= reflect.Uint64) && fk == reflect.String {
+		return false
+	}
+
+	fv.Set(rv.Convert(ft))
+	return true
+}
+
 func fmtiface(v interface{}) string {
 	if str, ok := v.(string); ok {
 		return "\"" + str + "\""
@@ -138,4 +180,42 @@ func fmtifaces(v []interface{}) string {
 	}
 
 	return str.String()
+}
+
+// Encode index slice into single string
+func encodeIndices(indices []int) string {
+	var sb strings.Builder
+	for _, index := range indices {
+		sb.WriteString("/")
+		sb.WriteString(strconv.Itoa(index))
+	}
+	return sb.String()
+}
+
+// Get field by index and init pointers on path if flag is true
+//  modified from: https://cs.opensource.google/go/go/+/refs/tags/go1.17.7:src/reflect/value.go;l=1228-1245;bpv
+func reflectValueFieldByIndex(rv reflect.Value, index []int, init bool) reflect.Value {
+	if len(index) == 1 {
+		return rv.Field(index[0])
+	}
+
+	for depth := 0; depth < len(index)-1; depth += 1 {
+		field := rv.Field(index[depth])
+
+		if field.Kind() != reflect.Ptr {
+			rv = field
+			continue
+		}
+
+		if field.IsNil() {
+			if !init {
+				targetType := field.Type().Elem().FieldByIndex(index[depth+1:]).Type
+				return reflect.Zero(reflect.PtrTo(targetType))
+			}
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+
+		rv = field.Elem()
+	}
+	return rv.Field(index[len(index)-1])
 }

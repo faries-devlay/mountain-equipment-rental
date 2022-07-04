@@ -11,7 +11,7 @@ type findAll []*MockFindAll
 
 func (fa *findAll) register(ctxData ctxData, queriers ...rel.Querier) *MockFindAll {
 	mfa := &MockFindAll{
-		assert:   &Assert{ctxData: ctxData},
+		assert:   &Assert{ctxData: ctxData, repeatability: 1},
 		argQuery: rel.Build("", queriers...),
 	}
 	*fa = append(*fa, mfa)
@@ -61,7 +61,9 @@ type MockFindAll struct {
 
 // Result sets the result of this query.
 func (mfa *MockFindAll) Result(result interface{}) *Assert {
-	mfa.argQuery.Table = rel.NewCollection(result, true).Table()
+	if mfa.argQuery.Table == "" {
+		mfa.argQuery.Table = rel.NewCollection(result, true).Table()
+	}
 	mfa.argRecords = result
 	return mfa.assert
 }
