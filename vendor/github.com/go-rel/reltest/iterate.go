@@ -13,7 +13,7 @@ type iterate []*MockIterate
 
 func (i *iterate) register(ctxData ctxData, query rel.Query, options ...rel.IteratorOption) *MockIterate {
 	mi := &MockIterate{
-		assert:     &Assert{ctxData: ctxData},
+		assert:     &Assert{ctxData: ctxData, repeatability: 1},
 		argQuery:   query,
 		argOptions: options,
 	}
@@ -38,7 +38,7 @@ func (i iterate) execute(ctx context.Context, query rel.Query, options ...rel.It
 	panic(failExecuteMessage(mi, i))
 }
 
-func (i *iterate) assert(t T) bool {
+func (i *iterate) assert(t TestingT) bool {
 	t.Helper()
 	for _, mi := range *i {
 		if !mi.assert.assert(t, mi) {
@@ -66,7 +66,7 @@ type MockIterate struct {
 }
 
 // Result sets the result of preload.
-func (mi *MockIterate) Result(result interface{}) *Assert {
+func (mi *MockIterate) Result(result any) *Assert {
 	rt := reflect.TypeOf(result)
 	if rt.Kind() == reflect.Ptr {
 		rt = rt.Elem()
@@ -91,11 +91,13 @@ func (mi *MockIterate) ConnectionClosed() *Assert {
 	return mi.Error(ErrConnectionClosed)
 }
 
+// Close iterator.
 func (mi MockIterate) Close() error {
 	return nil
 }
 
-func (mi *MockIterate) Next(record interface{}) error {
+// Next return next entity in iterator.
+func (mi *MockIterate) Next(entity any) error {
 	if mi.err != nil {
 		return mi.err
 	}
@@ -108,7 +110,7 @@ func (mi *MockIterate) Next(record interface{}) error {
 		doc = mi.result.Get(mi.current)
 	)
 
-	reflect.ValueOf(record).Elem().Set(doc.ReflectValue())
+	reflect.ValueOf(entity).Elem().Set(doc.ReflectValue())
 
 	mi.current++
 	return nil
