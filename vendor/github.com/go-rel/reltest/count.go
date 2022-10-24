@@ -10,7 +10,7 @@ type count []*MockCount
 
 func (c *count) register(ctxData ctxData, collection string, queriers ...rel.Querier) *MockCount {
 	mc := &MockCount{
-		assert:        &Assert{ctxData: ctxData},
+		assert:        &Assert{ctxData: ctxData, repeatability: 1},
 		argCollection: collection,
 		argQuery:      rel.Build(collection, queriers...),
 	}
@@ -36,7 +36,7 @@ func (c count) execute(ctx context.Context, collection string, queriers ...rel.Q
 	panic(failExecuteMessage(mc, c))
 }
 
-func (c *count) assert(t T) bool {
+func (c *count) assert(t TestingT) bool {
 	t.Helper()
 	for _, mc := range *c {
 		if !mc.assert.assert(t, mc) {
